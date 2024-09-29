@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+// Importa las clases específicas de Android
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 void main() {
   runApp(const MyApp());
@@ -37,20 +39,40 @@ class _WebViewPageState extends State<WebViewPage> {
   void initState() {
     super.initState();
     _getLocationPermission();
-    _controller = WebViewController()
+    _initializeWebView();
+  }
+
+  // Método para inicializar el WebViewController y cargar la página
+  void _initializeWebView() {
+    final PlatformWebViewControllerCreationParams params =
+        const PlatformWebViewControllerCreationParams();
+
+    _controller = WebViewController.fromPlatformCreationParams(params);
+
+    _controller
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (String url) {
-          print('Página empezó a cargar: $url');
-        },
-        onPageFinished: (String url) {
-          print('Página terminó de cargar: $url');
-        },
-        onWebResourceError: (WebResourceError error) {
-          print('Error cargando la página: $error');
-        },
-      ))
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (String url) {
+            print('Página empezó a cargar: $url');
+          },
+          onPageFinished: (String url) {
+            print('Página terminó de cargar: $url');
+            if (_currentPosition != null) {
+              _sendLocationToWebView();
+            }
+          },
+          onWebResourceError: (WebResourceError error) {
+            print('Error cargando la página: $error');
+          },
+        ),
+      )
       ..loadRequest(Uri.parse('https://app.sicotys.com'));
+
+    // Solo habilitar la depuración para Android
+    if (_controller.platform is AndroidWebViewController) {
+      AndroidWebViewController.enableDebugging(true);
+    }
   }
 
   // Método para solicitar permisos y obtener la ubicación
@@ -58,43 +80,54 @@ class _WebViewPageState extends State<WebViewPage> {
     bool serviceEnabled;
     LocationPermission permission;
 
-    // Verifica si el servicio de ubicación está habilitado
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      // Si el servicio no está habilitado, no podemos continuar
       print('El servicio de ubicación está deshabilitado.');
       return;
     }
 
-    // Verifica si se tiene permiso para la ubicación
     permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        // Permiso denegado, no podemos continuar
         print('Permiso de ubicación denegado.');
         return;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      // Los permisos han sido denegados permanentemente, no podemos solicitar permisos
-      print('Los permisos de ubicación han sido denegados permanentemente.');
+      print('Permisos de ubicación denegados permanentemente.');
       return;
     }
 
-    // Si llegamos aquí, tenemos permiso para acceder a la ubicación
     _getCurrentLocation();
   }
 
   // Método para obtener la ubicación actual
   Future<void> _getCurrentLocation() async {
-    Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
-    setState(() {
-      _currentPosition = position;
-      print('Ubicación obtenida: ${position.latitude}, ${position.longitude}');
-    });
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      setState(() {
+        _currentPosition = position;
+        print(
+            'Ubicación obtenida: ${position.latitude}, ${position.longitude}');
+        _sendLocationToWebView();
+      });
+    } catch (e) {
+      print('Error al obtener la ubicación: $e');
+    }
+  }
+
+  // Enviar la ubicación al WebView mediante JavaScript
+  void _sendLocationToWebView() {
+    if (_controller != null && _currentPosition != null) {
+      String lat = _currentPosition!.latitude.toString();
+      String lng = _currentPosition!.longitude.toString();
+      String script = "window.flutterLocationReceived($lat, $lng);";
+      _controller.runJavaScript(script);
+      print('Ubicación enviada al WebView: $lat, $lng');
+    }
   }
 
   @override
@@ -104,11 +137,9 @@ class _WebViewPageState extends State<WebViewPage> {
         title: const Text('Reportes Yopal'),
         backgroundColor: Colors.blue,
       ),
-      body: _currentPosition == null
-          ? const Center(
-              child:
-                  CircularProgressIndicator()) // Muestra un indicador de carga mientras se obtiene la ubicación
-          : WebViewWidget(controller: _controller),
+      body: WebViewWidget(
+        controller: _controller,
+      ),
     );
   }
 }
